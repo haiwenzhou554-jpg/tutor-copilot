@@ -4,25 +4,17 @@ const stopBtn = $('stopBtn');
 const testBtn = $('testBtn');
 const logEl = $('log');
 
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+let recognition = null;
 let ws = null;
-let stream = null;
-let audioContext = null;
-let source = null;
-let analyser = null;
-let processor = null;
-let silentGain = null;
-let animationId = null;
+let running = false;
 let timerId = null;
 let pingId = null;
 let startedAt = null;
-let lastSpeechAt = 0;
-let lastCommitAt = 0;
-let heardSpeechSinceCommit = false;
-let totalSentBytes = 0;
-let totalChunks = 0;
-
-const transcriptItems = new Map();
-const transcriptOrder = [];
+let finalText = '';
+let lastInterim = '';
+let sentCount = 0;
 
 function log(message) {
   const t = new Date().toLocaleTimeString();
@@ -32,18 +24,12 @@ function log(message) {
 
 function wsUrl() {
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${proto}//${window.location.host}/ws/audio`;
-}
-
-function formatBytes(n) {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / 1024 / 1024).toFixed(2)} MB`;
+  return `${proto}//${window.location.host}/ws/transcript`;
 }
 
 function updateLiveUI(live) {
   $('statusDot').className = `status-dot ${live ? 'live' : 'idle'}`;
-  $('connectionText').textContent = live ? '正在转录' : '未开始';
+  $('connectionText').textContent = live ? '正在识别' : '未开始';
   startBtn.disabled = live;
   stopBtn.disabled = !live;
 }
@@ -52,281 +38,226 @@ function startTimer() {
   startedAt = Date.now();
   timerId = setInterval(() => {
     const s = Math.floor((Date.now() - startedAt) / 1000);
-    $('timer').textContent = `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+    $('timer').textContent =
+      `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
   }, 250);
 }
 
-function downsampleTo24k(input, inputRate) {
-  const targetRate = 24000;
-  if (inputRate === targetRate) return input;
-
-  const ratio = inputRate / targetRate;
-  const outputLength = Math.floor(input.length / ratio);
-  const output = new Float32Array(outputLength);
-
-  let offset = 0;
-  for (let i = 0; i < outputLength; i++) {
-    const nextOffset = Math.floor((i + 1) * ratio);
-    let sum = 0;
-    let count = 0;
-    for (let j = offset; j < nextOffset && j < input.length; j++) {
-      sum += input[j];
-      count++;
-    }
-    output[i] = count ? sum / count : 0;
-    offset = nextOffset;
-  }
-
-  return output;
-}
-
-function floatToPCM16(float32) {
-  const buffer = new ArrayBuffer(float32.length * 2);
-  const view = new DataView(buffer);
-  for (let i = 0; i < float32.length; i++) {
-    const s = Math.max(-1, Math.min(1, float32[i]));
-    view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
-  }
-  return buffer;
-}
-
-function rmsOf(data) {
-  let sum = 0;
-  for (let i = 0; i < data.length; i++) sum += data[i] * data[i];
-  return Math.sqrt(sum / data.length);
-}
-
 function renderTranscript() {
-  const finalLines = [];
-  let partial = '';
-
-  for (const id of transcriptOrder) {
-    const item = transcriptItems.get(id);
-    if (!item) continue;
-    if (item.final) finalLines.push(item.final);
-    else if (item.partial) partial += item.partial;
-  }
-
-  $('transcriptFinal').textContent = finalLines.join('\n');
-  $('transcriptPartial').textContent = partial;
+  $('transcriptFinal').textContent = finalText;
+  $('transcriptPartial').textContent = lastInterim || (running ? '正在听…' : '等待语音…');
   $('transcriptBox').scrollTop = $('transcriptBox').scrollHeight;
 }
 
-function ensureTranscriptItem(id) {
-  const safeId = id || `unknown-${Date.now()}`;
-  if (!transcriptItems.has(safeId)) {
-    transcriptItems.set(safeId, { partial: '', final: '' });
-    transcriptOrder.push(safeId);
-  }
-  return [safeId, transcriptItems.get(safeId)];
-}
+function sendTranscript(text, final, confidence = null) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
-function maybeCommit(rms) {
-  const now = Date.now();
-  const speechThreshold = 0.012;
-  const silenceToCommitMs = 850;
-  const maxTurnMs = 9000;
+  ws.send(JSON.stringify({
+    type: 'transcript',
+    text,
+    final,
+    confidence,
+    ts: Date.now()
+  }));
 
-  if (rms > speechThreshold) {
-    lastSpeechAt = now;
-    heardSpeechSinceCommit = true;
-  }
-
-  const silentLongEnough = heardSpeechSinceCommit && now - lastSpeechAt > silenceToCommitMs;
-  const turnTooLong = heardSpeechSinceCommit && now - lastCommitAt > maxTurnMs;
-
-  if ((silentLongEnough || turnTooLong) && ws?.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: 'commit' }));
-    heardSpeechSinceCommit = false;
-    lastCommitAt = now;
-  }
+  sentCount += 1;
+  $('chunks').textContent = sentCount;
 }
 
 async function testBackend() {
   try {
     const res = await fetch('/health');
     const data = await res.json();
-    if (data.openai_configured) {
-      log('✅ 服务器正常，OpenAI 已配置');
-    } else {
-      log('⚠️ 服务器正常，但还没有配置 OPENAI_API_KEY');
+
+    if (!SpeechRecognition) {
+      log('⚠️ 服务器正常，但当前浏览器不支持 SpeechRecognition。请改用 Chrome。');
+      return;
     }
+
+    log(`✅ 服务器正常：${data.mode}`);
+    log('✅ 当前浏览器支持 SpeechRecognition');
   } catch (err) {
     log(`❌ 测试失败：${err.message}`);
   }
 }
 
-async function startListening() {
-  try {
-    log('请求麦克风权限...');
-    stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-      video: false,
-    });
-    log('✅ 麦克风已授权');
+function createRecognition() {
+  if (!SpeechRecognition) {
+    throw new Error('当前浏览器不支持 SpeechRecognition，请用 Chrome 打开。');
+  }
 
+  const rec = new SpeechRecognition();
+  rec.lang = 'zh-CN';
+  rec.continuous = true;
+  rec.interimResults = true;
+  rec.maxAlternatives = 1;
+
+  rec.onstart = () => {
+    log('✅ 浏览器语音识别已启动');
+    $('mime').textContent = 'Web Speech · zh-CN';
+  };
+
+  rec.onspeechstart = () => {
+    $('meterFill').style.width = '85%';
+  };
+
+  rec.onspeechend = () => {
+    $('meterFill').style.width = '20%';
+  };
+
+  rec.onresult = (event) => {
+    let interim = '';
+
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const result = event.results[i];
+      const transcript = result[0].transcript || '';
+      const confidence = Number.isFinite(result[0].confidence) ? result[0].confidence : null;
+
+      if (result.isFinal) {
+        finalText += (finalText ? '\n' : '') + transcript.trim();
+        sendTranscript(transcript.trim(), true, confidence);
+      } else {
+        interim += transcript;
+      }
+    }
+
+    lastInterim = interim.trim();
+
+    if (lastInterim) {
+      sendTranscript(lastInterim, false, null);
+    }
+
+    renderTranscript();
+  };
+
+  rec.onerror = (event) => {
+    log(`❌ 语音识别错误：${event.error}`);
+    if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+      running = false;
+      updateLiveUI(false);
+    }
+  };
+
+  rec.onend = () => {
+    $('meterFill').style.width = '0%';
+
+    if (running) {
+      try {
+        rec.start();
+        log('↻ 识别服务自动重连');
+      } catch (_) {}
+    } else {
+      log('语音识别已停止');
+    }
+  };
+
+  return rec;
+}
+
+function connectTranscriptSocket() {
+  return new Promise((resolve, reject) => {
     ws = new WebSocket(wsUrl());
-    ws.binaryType = 'arraybuffer';
 
-    ws.onopen = async () => {
-      log(`✅ WebSocket 已连接：${wsUrl()}`);
-
-      audioContext = new (window.AudioContext || window.webkitAudioContext)();
-      await audioContext.resume();
-
-      source = audioContext.createMediaStreamSource(stream);
-      analyser = audioContext.createAnalyser();
-      analyser.fftSize = 256;
-
-      processor = audioContext.createScriptProcessor(4096, 1, 1);
-      silentGain = audioContext.createGain();
-      silentGain.gain.value = 0;
-
-      source.connect(analyser);
-      analyser.connect(processor);
-      processor.connect(silentGain);
-      silentGain.connect(audioContext.destination);
-
-      lastCommitAt = Date.now();
-
-      processor.onaudioprocess = (event) => {
-        if (!ws || ws.readyState !== WebSocket.OPEN) return;
-
-        const input = event.inputBuffer.getChannelData(0);
-        const rms = rmsOf(input);
-        const downsampled = downsampleTo24k(input, audioContext.sampleRate);
-        const pcm = floatToPCM16(downsampled);
-
-        ws.send(pcm);
-        totalChunks++;
-        totalSentBytes += pcm.byteLength;
-
-        $('chunks').textContent = totalChunks;
-        $('bytes').textContent = formatBytes(totalSentBytes);
-        $('mime').textContent = 'PCM16 · 24kHz';
-
-        maybeCommit(rms);
-      };
-
-      const meterData = new Uint8Array(analyser.frequencyBinCount);
-      const draw = () => {
-        analyser.getByteFrequencyData(meterData);
-        const avg = meterData.reduce((a, b) => a + b, 0) / meterData.length;
-        $('meterFill').style.width = `${Math.min(100, avg * 1.5)}%`;
-        animationId = requestAnimationFrame(draw);
-      };
-      draw();
-
-      updateLiveUI(true);
-      startTimer();
-
+    ws.onopen = () => {
+      log(`✅ FastAPI WebSocket 已连接：${wsUrl()}`);
       pingId = setInterval(() => {
-        if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ping' }));
+        if (ws?.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'ping' }));
+        }
       }, 20000);
+      resolve();
     };
 
     ws.onmessage = (event) => {
-      let data;
       try {
-        data = JSON.parse(event.data);
-      } catch {
-        return;
-      }
-
-      if (data.type === 'connected') {
-        log(`✅ ${data.message}`);
-      }
-
-      if (data.type === 'config_error') {
-        log(`❌ ${data.message}`);
-      }
-
-      if (data.type === 'transcription_status') {
-        log(`OpenAI: ${data.status}`);
-      }
-
-      if (data.type === 'transcript_delta') {
-        const [id, item] = ensureTranscriptItem(data.item_id);
-        item.partial += data.delta || '';
-        transcriptItems.set(id, item);
-        renderTranscript();
-      }
-
-      if (data.type === 'transcript_final') {
-        const [id, item] = ensureTranscriptItem(data.item_id);
-        item.final = data.transcript || item.partial;
-        item.partial = '';
-        transcriptItems.set(id, item);
-        renderTranscript();
-      }
-
-      if (data.type === 'openai_error') {
-        log(`❌ OpenAI：${data.message}`);
-      }
+        const data = JSON.parse(event.data);
+        if (data.type === 'connected') {
+          log(`✅ ${data.message}`);
+        }
+        if (data.type === 'transcript_ack') {
+          $('bytes').textContent = `${data.count} 条`;
+        }
+      } catch (_) {}
     };
 
-    ws.onerror = () => log('❌ WebSocket 出错');
+    ws.onerror = () => reject(new Error('WebSocket 连接失败'));
+
     ws.onclose = () => {
-      log('WebSocket 已断开');
-      stopAudioGraph();
-      updateLiveUI(false);
+      if (pingId) clearInterval(pingId);
+      log('FastAPI WebSocket 已断开');
     };
+  });
+}
+
+async function startListening() {
+  try {
+    if (!SpeechRecognition) {
+      throw new Error('当前浏览器不支持语音识别。请复制网址到 Chrome 打开，不要使用微信内置浏览器。');
+    }
+
+    await connectTranscriptSocket();
+
+    recognition = createRecognition();
+    running = true;
+    recognition.start();
+
+    updateLiveUI(true);
+    startTimer();
+    renderTranscript();
 
   } catch (err) {
-    log(`❌ 启动失败：${err.name || 'Error'} - ${err.message}`);
+    log(`❌ 启动失败：${err.message}`);
     stopListening();
   }
 }
 
-function stopAudioGraph() {
-  if (processor) processor.onaudioprocess = null;
-  if (animationId) cancelAnimationFrame(animationId);
+function stopListening() {
+  running = false;
+
+  try {
+    if (recognition) recognition.stop();
+  } catch (_) {}
+
+  recognition = null;
+
+  if (ws && ws.readyState <= WebSocket.OPEN) {
+    ws.close();
+  }
+  ws = null;
+
   if (timerId) clearInterval(timerId);
   if (pingId) clearInterval(pingId);
-  if (stream) stream.getTracks().forEach((t) => t.stop());
-  if (audioContext) audioContext.close().catch(() => {});
 
-  processor = null;
-  analyser = null;
-  source = null;
-  silentGain = null;
-  stream = null;
-  audioContext = null;
+  timerId = null;
+  pingId = null;
+
   $('meterFill').style.width = '0%';
-}
-
-function stopListening() {
-  try {
-    if (heardSpeechSinceCommit && ws?.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'commit' }));
-    }
-    if (ws && ws.readyState <= WebSocket.OPEN) ws.close();
-  } finally {
-    stopAudioGraph();
-    ws = null;
-    updateLiveUI(false);
-    log('■ 已停止');
-  }
+  updateLiveUI(false);
+  renderTranscript();
+  log('■ 已停止');
 }
 
 testBtn.addEventListener('click', testBackend);
 startBtn.addEventListener('click', startListening);
 stopBtn.addEventListener('click', stopListening);
-$('clearBtn').addEventListener('click', () => { logEl.textContent = ''; });
+
+$('clearBtn').addEventListener('click', () => {
+  logEl.textContent = '';
+});
+
 $('clearTranscriptBtn').addEventListener('click', () => {
-  transcriptItems.clear();
-  transcriptOrder.length = 0;
+  finalText = '';
+  lastInterim = '';
+  sentCount = 0;
+  $('chunks').textContent = '0';
+  $('bytes').textContent = '0 条';
   renderTranscript();
 });
 
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js')
-      .then(() => log('PWA Service Worker 已注册'))
-      .catch((err) => log(`Service Worker 注册失败：${err.message}`));
-  });
-}
+window.addEventListener('load', () => {
+  if (!SpeechRecognition) {
+    log('⚠️ 当前浏览器没有 SpeechRecognition。建议使用 Android Chrome。');
+  } else {
+    log('✅ 浏览器语音识别能力已检测到');
+  }
+});
