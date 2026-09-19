@@ -3,6 +3,8 @@ const $ = (id) => document.getElementById(id);
 const startBtn = $('startBtn');
 const stopBtn = $('stopBtn');
 const testBtn = $('testBtn');
+const refreshMicsBtn = $('refreshMicsBtn');
+const micSelect = $('micSelect');
 const logEl = $('log');
 
 let ws = null;
@@ -11,7 +13,7 @@ let audioContext = null;
 let source = null;
 let analyser = null;
 let processor = null;
-let silentGain = null;
+let keepAliveGain = null;
 let animationId = null;
 let timerId = null;
 let pingId = null;
@@ -45,6 +47,8 @@ function updateLiveUI(live) {
   $('connectionText').textContent = live ? '正在识别' : '未开始';
   startBtn.disabled = live;
   stopBtn.disabled = !live;
+  micSelect.disabled = live;
+  refreshMicsBtn.disabled = live;
 }
 
 function startTimer() {
@@ -69,34 +73,57 @@ function floatToPCM16(float32) {
 
   for (let i = 0; i < float32.length; i++) {
     const s = Math.max(-1, Math.min(1, float32[i]));
-    view.setInt16(
-      i * 2,
-      s < 0 ? s * 0x8000 : s * 0x7fff,
-      true
-    );
+    view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
   }
-
   return buffer;
 }
 
 function rmsOf(float32) {
   let sum = 0;
-  for (let i = 0; i < float32.length; i++) {
-    sum += float32[i] * float32[i];
-  }
+  for (let i = 0; i < float32.length; i++) sum += float32[i] * float32[i];
   return Math.sqrt(sum / Math.max(1, float32.length));
+}
+
+async function populateMicrophones() {
+  try {
+    // Request permission once so device labels become visible.
+    const temp = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    temp.getTracks().forEach((t) => t.stop());
+
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const mics = devices.filter((d) => d.kind === 'audioinput');
+
+    micSelect.innerHTML = '';
+
+    if (!mics.length) {
+      const option = document.createElement('option');
+      option.textContent = '没有检测到麦克风';
+      option.value = '';
+      micSelect.appendChild(option);
+      log('❌ 没有检测到音频输入设备');
+      return;
+    }
+
+    mics.forEach((mic, idx) => {
+      const option = document.createElement('option');
+      option.value = mic.deviceId;
+      option.textContent = mic.label || `麦克风 ${idx + 1}`;
+      micSelect.appendChild(option);
+    });
+
+    log(`✅ 检测到 ${mics.length} 个麦克风输入设备`);
+  } catch (err) {
+    log(`❌ 读取麦克风列表失败：${err.message}`);
+  }
 }
 
 async function testBackend() {
   try {
     const res = await fetch('/health', { cache: 'no-store' });
     const data = await res.json();
-
-    if (data.model_loaded) {
-      log('✅ 服务器正常，Paraformer 中文识别模型已加载');
-    } else {
-      log(`❌ 模型未加载：${data.model_error || 'unknown'}`);
-    }
+    log(data.model_loaded
+      ? '✅ 服务器正常，Paraformer 中文识别模型已加载'
+      : `❌ 模型未加载：${data.model_error || 'unknown'}`);
   } catch (err) {
     log(`❌ 测试失败：${err.message}`);
   }
@@ -111,19 +138,20 @@ async function setupAudioGraph(mediaStream) {
   analyser.fftSize = 256;
 
   processor = audioContext.createScriptProcessor(4096, 1, 1);
-  silentGain = audioContext.createGain();
-  silentGain.gain.value = 0;
 
-  // IMPORTANT: feed the processor directly from the microphone.
-  // The analyser is only a parallel visual branch.
+  // Keep graph alive with an inaudible-but-nonzero output path.
+  keepAliveGain = audioContext.createGain();
+  keepAliveGain.gain.value = 0.000001;
+
   source.connect(processor);
   source.connect(analyser);
-  processor.connect(silentGain);
-  silentGain.connect(audioContext.destination);
+  processor.connect(keepAliveGain);
+  keepAliveGain.connect(audioContext.destination);
 
   ws.send(JSON.stringify({
     type: 'audio_meta',
-    sample_rate: audioContext.sampleRate
+    sample_rate: audioContext.sampleRate,
+    device_label: stream.getAudioTracks()[0]?.label || ''
   }));
 
   let diagnosticCounter = 0;
@@ -143,25 +171,20 @@ async function setupAudioGraph(mediaStream) {
     $('chunks').textContent = totalChunks;
     $('bytes').textContent = formatBytes(totalSentBytes);
     $('mime').textContent = `PCM16 · ${audioContext.sampleRate}Hz`;
+    $('clientRms').textContent = `RMS ${browserRms.toFixed(5)}`;
+
+    // Use direct RMS for the visual meter, not only the AnalyserNode.
+    $('meterFill').style.width = `${Math.min(100, browserRms * 900)}%`;
 
     if (diagnosticCounter % 25 === 0) {
+      ws.send(JSON.stringify({
+        type: 'client_audio_diag',
+        rms: browserRms,
+        device_label: stream.getAudioTracks()[0]?.label || ''
+      }));
       log(`浏览器采音 RMS：${browserRms.toFixed(5)}`);
     }
   };
-
-  const meterData = new Uint8Array(analyser.frequencyBinCount);
-  const draw = () => {
-    analyser.getByteFrequencyData(meterData);
-    const avg =
-      meterData.reduce((a, b) => a + b, 0) / meterData.length;
-
-    $('meterFill').style.width =
-      `${Math.min(100, avg * 1.5)}%`;
-
-    animationId = requestAnimationFrame(draw);
-  };
-
-  draw();
 }
 
 function stopAudioGraph() {
@@ -171,35 +194,43 @@ function stopAudioGraph() {
   if (pingId) clearInterval(pingId);
   if (stream) stream.getTracks().forEach((t) => t.stop());
 
-  if (audioContext) {
-    audioContext.close().catch(() => {});
-  }
+  if (audioContext) audioContext.close().catch(() => {});
 
   processor = null;
   analyser = null;
   source = null;
-  silentGain = null;
+  keepAliveGain = null;
   stream = null;
   audioContext = null;
   timerId = null;
   pingId = null;
 
   $('meterFill').style.width = '0%';
+  $('clientRms').textContent = 'RMS 0.00000';
 }
 
 async function startListening() {
   try {
-    log('请求麦克风权限...');
+    const selectedDeviceId = micSelect.value;
+
+    if (!selectedDeviceId) {
+      throw new Error('请先选择一个麦克风设备');
+    }
+
+    log('请求选定麦克风...');
 
     stream = await navigator.mediaDevices.getUserMedia({
-      audio: true,
+      audio: {
+        deviceId: { exact: selectedDeviceId }
+      },
       video: false,
     });
 
     const track = stream.getAudioTracks()[0];
     const settings = track?.getSettings ? track.getSettings() : {};
-    log(`✅ 麦克风已授权：${track?.label || '默认麦克风'}`);
-    log(`🎤 设备设置：${JSON.stringify(settings)}`);
+
+    log(`✅ 当前麦克风：${track?.label || '未知'}`);
+    log(`🎤 设置：${JSON.stringify(settings)}`);
 
     ws = new WebSocket(wsUrl());
     ws.binaryType = 'arraybuffer';
@@ -223,28 +254,12 @@ async function startListening() {
 
     ws.onmessage = (event) => {
       let data;
+      try { data = JSON.parse(event.data); } catch { return; }
 
-      try {
-        data = JSON.parse(event.data);
-      } catch {
-        return;
-      }
-
-      if (data.type === 'connected') {
-        log(`✅ ${data.message}`);
-      }
-
-      if (data.type === 'audio_meta_ack') {
-        log(`✅ 服务器按 ${data.sample_rate} Hz 接收音频`);
-      }
-
-      if (data.type === 'model_error') {
-        log(`❌ 模型：${data.message}`);
-      }
-
-      if (data.type === 'asr_error') {
-        log(`❌ ASR：${data.message}`);
-      }
+      if (data.type === 'connected') log(`✅ ${data.message}`);
+      if (data.type === 'audio_meta_ack') log(`✅ 服务器按 ${data.sample_rate} Hz 接收音频`);
+      if (data.type === 'model_error') log(`❌ 模型：${data.message}`);
+      if (data.type === 'asr_error') log(`❌ ASR：${data.message}`);
 
       if (data.type === 'transcript_partial') {
         partialText = data.text || '';
@@ -253,32 +268,22 @@ async function startListening() {
 
       if (data.type === 'transcript_final') {
         const text = (data.text || '').trim();
-
-        if (text) {
-          finalSegments.push(text);
-        }
-
+        if (text) finalSegments.push(text);
         partialText = '';
         renderTranscript();
       }
 
       if (data.type === 'audio_ack') {
-        log(
-          `服务器处理 ${data.chunk_count} 块 · RMS ${Number(data.rms).toFixed(4)} · Peak ${Number(data.peak).toFixed(3)} · decode ${data.decodes}`
-        );
+        log(`服务器处理 ${data.chunk_count} 块 · RMS ${Number(data.rms).toFixed(4)} · Peak ${Number(data.peak).toFixed(3)} · decode ${data.decodes}`);
       }
 
       if (data.type === 'finished') {
         log('✅ 最后一段识别完成');
-        if (ws?.readyState === WebSocket.OPEN) {
-          ws.close();
-        }
+        if (ws?.readyState === WebSocket.OPEN) ws.close();
       }
     };
 
-    ws.onerror = () => {
-      log('❌ WebSocket 出错');
-    };
+    ws.onerror = () => log('❌ WebSocket 出错');
 
     ws.onclose = () => {
       log('ASR 连接已断开');
@@ -301,11 +306,8 @@ function stopListening() {
 
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'finish' }));
-
     setTimeout(() => {
-      if (ws?.readyState === WebSocket.OPEN) {
-        ws.close();
-      }
+      if (ws?.readyState === WebSocket.OPEN) ws.close();
     }, 1500);
   } else {
     ws = null;
@@ -316,21 +318,19 @@ function stopListening() {
 }
 
 testBtn.addEventListener('click', testBackend);
+refreshMicsBtn.addEventListener('click', populateMicrophones);
 startBtn.addEventListener('click', startListening);
 stopBtn.addEventListener('click', stopListening);
 
-$('clearBtn').addEventListener('click', () => {
-  logEl.textContent = '';
-});
-
+$('clearBtn').addEventListener('click', () => { logEl.textContent = ''; });
 $('clearTranscriptBtn').addEventListener('click', () => {
   finalSegments = [];
   partialText = '';
   totalChunks = 0;
   totalSentBytes = 0;
-
   $('chunks').textContent = '0';
   $('bytes').textContent = '0 KB';
-
   renderTranscript();
 });
+
+window.addEventListener('load', populateMicrophones);
