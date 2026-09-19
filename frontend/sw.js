@@ -1,4 +1,4 @@
-const CACHE = 'tutor-copilot-v4';
+const CACHE = 'tutor-copilot-v5';
 const ASSETS = ['/', '/index.html', '/style.css', '/app.js', '/manifest.webmanifest'];
 
 self.addEventListener('install', (event) => {
