@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#111827" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Tutor Copilot" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="stylesheet" href="/style.css" />
+  <title>Tutor Copilot</title>
+</head>
+<body>
+  <main class="app-shell">
+    <section class="card hero">
+      <div>
+        <p class="eyebrow">Tutor Copilot · MVP 0.1</p>
+        <h1>手机麦克风 → FastAPI</h1>
+        <p class="sub">先验证实时音频链路，不接 AI。</p>
+      </div>
+      <div id="statusDot" class="status-dot idle"></div>
+    </section>
+
+    <section class="card">
+      <p class="label">服务器连接</p>
+      <p class="hint">前端和 FastAPI 已合并为同一个 Railway 服务，无需填写后端地址。</p>
+      <button id="testBtn" class="secondary">测试服务器</button>
+    </section>
+
+    <section class="card live-card">
+      <div class="row between">
+        <div>
+          <p class="label">课堂监听</p>
+          <p id="connectionText" class="big-status">未开始</p>
+        </div>
+        <span id="timer">00:00</span>
+      </div>
+
+      <div class="meter"><div id="meterFill"></div></div>
+
+      <button id="startBtn" class="primary">🎙️ 开始监听</button>
+      <button id="stopBtn" class="danger" disabled>■ 停止监听</button>
+    </section>
+
+    <section class="card stats">
+      <div><span>音频块</span><strong id="chunks">0</strong></div>
+      <div><span>已发送</span><strong id="bytes">0 KB</strong></div>
+      <div><span>格式</span><strong id="mime">-</strong></div>
+    </section>
+
+    <section class="card log-card">
+      <div class="row between"><p class="label">调试日志</p><button id="clearBtn" class="text-btn">清空</button></div>
+      <pre id="log"></pre>
+    </section>
+
+    <p class="privacy">测试时请确保录音参与者知情并同意。</p>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>
