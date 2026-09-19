@@ -9,9 +9,11 @@ FRONTEND_DIR = BASE_DIR / "frontend"
 
 app = FastAPI(title="Tutor Copilot Audio Receiver")
 
+
 @app.get("/health")
 async def health():
     return {"ok": True, "ts": time.time()}
+
 
 @app.websocket("/ws/audio")
 async def audio_ws(websocket: WebSocket):
@@ -28,6 +30,9 @@ async def audio_ws(websocket: WebSocket):
     try:
         while True:
             message = await websocket.receive()
+
+            if message.get("type") == "websocket.disconnect":
+                break
 
             if message.get("text") is not None:
                 try:
@@ -66,9 +71,12 @@ async def audio_ws(websocket: WebSocket):
                 })
 
     except WebSocketDisconnect:
+        pass
+    finally:
         print(
             f"[DISCONNECT] chunks={chunk_count} total_bytes={total_bytes}",
             flush=True,
         )
+
 
 app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")
