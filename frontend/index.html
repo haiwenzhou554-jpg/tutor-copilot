@@ -15,17 +15,17 @@
   <main class="app-shell">
     <section class="card hero">
       <div>
-        <p class="eyebrow">Tutor Copilot · MVP 0.2B</p>
-        <h1>实时课堂字幕</h1>
-        <p class="sub">浏览器语音识别 → FastAPI · 无需 GPT API</p>
+        <p class="eyebrow">Tutor Copilot · MVP 0.3</p>
+        <h1>自托管实时字幕</h1>
+        <p class="sub">手机 → FastAPI → Paraformer · 无 GPT API</p>
       </div>
       <div id="statusDot" class="status-dot idle"></div>
     </section>
 
     <section class="card">
-      <p class="label">兼容性检查</p>
-      <p class="hint">请用 Android Chrome 打开。微信内置浏览器可能不支持语音识别。</p>
-      <button id="testBtn" class="secondary">测试服务器和浏览器</button>
+      <p class="label">ASR 服务器</p>
+      <p class="hint">中文识别模型现在运行在我们的 Railway 后端，不再依赖 Chrome/Google 语音服务。</p>
+      <button id="testBtn" class="secondary">测试模型是否加载</button>
     </section>
 
     <section class="card live-card">
@@ -55,18 +55,22 @@
     </section>
 
     <section class="card stats">
-      <div><span>已发送</span><strong id="chunks">0</strong></div>
-      <div><span>后端确认</span><strong id="bytes">0 条</strong></div>
-      <div><span>识别方式</span><strong id="mime">-</strong></div>
+      <div><span>PCM 块</span><strong id="chunks">0</strong></div>
+      <div><span>已发送</span><strong id="bytes">0 KB</strong></div>
+      <div><span>格式</span><strong id="mime">-</strong></div>
     </section>
 
     <section class="card log-card">
-      <div class="row between"><p class="label">调试日志</p><button id="clearBtn" class="text-btn">清空</button></div>
+      <div class="row between">
+        <p class="label">调试日志</p>
+        <button id="clearBtn" class="text-btn">清空</button>
+      </div>
       <pre id="log"></pre>
     </section>
 
-    <p class="privacy">浏览器语音识别在部分浏览器中会把音频发送给浏览器厂商的在线识别服务；真实课堂测试前请确保参与者知情并同意。</p>
+    <p class="privacy">真实课堂测试前，请确保所有录音参与者知情并同意。</p>
   </main>
+
   <script src="/app.js"></script>
 </body>
 </html>
