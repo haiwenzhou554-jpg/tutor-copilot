@@ -15,16 +15,16 @@
   <main class="app-shell">
     <section class="card hero">
       <div>
-        <p class="eyebrow">Tutor Copilot · MVP 0.1</p>
-        <h1>手机麦克风 → FastAPI</h1>
-        <p class="sub">先验证实时音频链路，不接 AI。</p>
+        <p class="eyebrow">Tutor Copilot · MVP 0.2</p>
+        <h1>实时课堂字幕</h1>
+        <p class="sub">手机麦克风 → FastAPI → GPT Live Transcribe</p>
       </div>
       <div id="statusDot" class="status-dot idle"></div>
     </section>
 
     <section class="card">
-      <p class="label">服务器连接</p>
-      <p class="hint">前端和 FastAPI 已合并为同一个 Railway 服务，无需填写后端地址。</p>
+      <p class="label">服务器</p>
+      <p class="hint">先测试服务器。显示“OpenAI 已配置”后再开始实时转录。</p>
       <button id="testBtn" class="secondary">测试服务器</button>
     </section>
 
@@ -39,12 +39,23 @@
 
       <div class="meter"><div id="meterFill"></div></div>
 
-      <button id="startBtn" class="primary">🎙️ 开始监听</button>
-      <button id="stopBtn" class="danger" disabled>■ 停止监听</button>
+      <button id="startBtn" class="primary">🎙️ 开始实时转录</button>
+      <button id="stopBtn" class="danger" disabled>■ 停止</button>
+    </section>
+
+    <section class="card transcript-card">
+      <div class="row between">
+        <p class="label">实时字幕</p>
+        <button id="clearTranscriptBtn" class="text-btn">清空</button>
+      </div>
+      <div id="transcriptBox" class="transcript-box">
+        <div id="transcriptFinal" class="transcript-final"></div>
+        <div id="transcriptPartial" class="transcript-partial">等待语音…</div>
+      </div>
     </section>
 
     <section class="card stats">
-      <div><span>音频块</span><strong id="chunks">0</strong></div>
+      <div><span>PCM 块</span><strong id="chunks">0</strong></div>
       <div><span>已发送</span><strong id="bytes">0 KB</strong></div>
       <div><span>格式</span><strong id="mime">-</strong></div>
     </section>
@@ -54,7 +65,7 @@
       <pre id="log"></pre>
     </section>
 
-    <p class="privacy">测试时请确保录音参与者知情并同意。</p>
+    <p class="privacy">真实课堂测试前，请确保所有录音参与者知情并同意。</p>
   </main>
   <script src="/app.js"></script>
 </body>
