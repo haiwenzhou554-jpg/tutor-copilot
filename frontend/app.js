@@ -63,32 +63,6 @@ function renderTranscript() {
   $('transcriptBox').scrollTop = $('transcriptBox').scrollHeight;
 }
 
-function downsample(input, inputRate, targetRate = 16000) {
-  if (inputRate === targetRate) {
-    return new Float32Array(input);
-  }
-
-  const ratio = inputRate / targetRate;
-  const outputLength = Math.floor(input.length / ratio);
-  const output = new Float32Array(outputLength);
-
-  for (let i = 0; i < outputLength; i++) {
-    const start = Math.floor(i * ratio);
-    const end = Math.min(input.length, Math.floor((i + 1) * ratio));
-    let sum = 0;
-    let count = 0;
-
-    for (let j = start; j < end; j++) {
-      sum += input[j];
-      count++;
-    }
-
-    output[i] = count ? sum / count : 0;
-  }
-
-  return output;
-}
-
 function floatToPCM16(float32) {
   const buffer = new ArrayBuffer(float32.length * 2);
   const view = new DataView(buffer);
@@ -136,12 +110,16 @@ function setupAudioGraph(mediaStream) {
   processor.connect(silentGain);
   silentGain.connect(audioContext.destination);
 
+  ws.send(JSON.stringify({
+    type: 'audio_meta',
+    sample_rate: audioContext.sampleRate
+  }));
+
   processor.onaudioprocess = (event) => {
     if (!running || !ws || ws.readyState !== WebSocket.OPEN) return;
 
     const input = event.inputBuffer.getChannelData(0);
-    const samples16k = downsample(input, audioContext.sampleRate, 16000);
-    const pcm = floatToPCM16(samples16k);
+    const pcm = floatToPCM16(input);
 
     ws.send(pcm);
     totalChunks += 1;
@@ -149,7 +127,7 @@ function setupAudioGraph(mediaStream) {
 
     $('chunks').textContent = totalChunks;
     $('bytes').textContent = formatBytes(totalSentBytes);
-    $('mime').textContent = 'PCM16 · 16kHz';
+    $('mime').textContent = `PCM16 · ${audioContext.sampleRate}Hz`;
   };
 
   const meterData = new Uint8Array(analyser.frequencyBinCount);
@@ -217,6 +195,8 @@ async function startListening() {
       setupAudioGraph(stream);
       await audioContext.resume();
 
+      log(`🎙️ 浏览器采样率：${audioContext.sampleRate} Hz`);
+
       pingId = setInterval(() => {
         if (ws?.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'ping' }));
@@ -235,6 +215,10 @@ async function startListening() {
 
       if (data.type === 'connected') {
         log(`✅ ${data.message}`);
+      }
+
+      if (data.type === 'audio_meta_ack') {
+        log(`✅ 服务器按 ${data.sample_rate} Hz 接收音频`);
       }
 
       if (data.type === 'model_error') {
@@ -262,7 +246,9 @@ async function startListening() {
       }
 
       if (data.type === 'audio_ack') {
-        log(`服务器已处理 ${data.chunk_count} 个音频块`);
+        log(
+          `服务器处理 ${data.chunk_count} 块 · RMS ${Number(data.rms).toFixed(4)} · Peak ${Number(data.peak).toFixed(3)} · decode ${data.decodes}`
+        );
       }
 
       if (data.type === 'finished') {
@@ -303,7 +289,7 @@ function stopListening() {
       if (ws?.readyState === WebSocket.OPEN) {
         ws.close();
       }
-    }, 1200);
+    }, 1500);
   } else {
     ws = null;
   }
