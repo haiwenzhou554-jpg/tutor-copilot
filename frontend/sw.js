@@ -1,4 +1,4 @@
-const CACHE = 'tutor-copilot-v5';
+const CACHE = 'tutor-copilot-v6';
 const ASSETS = ['/', '/index.html', '/style.css', '/app.js', '/manifest.webmanifest'];
 
 self.addEventListener('install', (event) => {
@@ -16,7 +16,6 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
-
   event.respondWith(
     fetch(event.request).catch(() =>
       caches.match(event.request).then((r) => r || caches.match('/'))
