@@ -15,16 +15,31 @@
   <main class="app-shell">
     <section class="card hero">
       <div>
-        <p class="eyebrow">Tutor Copilot · MVP 0.3</p>
+        <p class="eyebrow">Tutor Copilot · MVP 0.3.1</p>
         <h1>自托管实时字幕</h1>
-        <p class="sub">手机 → FastAPI → Paraformer · 无 GPT API</p>
+        <p class="sub">先确认麦克风真的有声音，再进入 ASR。</p>
       </div>
       <div id="statusDot" class="status-dot idle"></div>
     </section>
 
     <section class="card">
+      <p class="label">麦克风输入</p>
+      <select id="micSelect"></select>
+      <button id="refreshMicsBtn" class="secondary">刷新麦克风列表</button>
+
+      <div class="input-diagnostic">
+        <div class="row between">
+          <span>输入音量</span>
+          <strong id="clientRms">RMS 0.00000</strong>
+        </div>
+        <div class="meter"><div id="meterFill"></div></div>
+        <p class="hint">说话时绿色条必须明显跳动，RMS 不能一直是 0。</p>
+      </div>
+    </section>
+
+    <section class="card">
       <p class="label">ASR 服务器</p>
-      <p class="hint">中文识别模型现在运行在我们的 Railway 后端，不再依赖 Chrome/Google 语音服务。</p>
+      <p class="hint">Paraformer 模型运行在 Railway 后端，不依赖 GPT API。</p>
       <button id="testBtn" class="secondary">测试模型是否加载</button>
     </section>
 
@@ -36,8 +51,6 @@
         </div>
         <span id="timer">00:00</span>
       </div>
-
-      <div class="meter"><div id="meterFill"></div></div>
 
       <button id="startBtn" class="primary">🎙️ 开始实时字幕</button>
       <button id="stopBtn" class="danger" disabled>■ 停止</button>
