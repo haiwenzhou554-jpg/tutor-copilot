@@ -79,6 +79,14 @@ function floatToPCM16(float32) {
   return buffer;
 }
 
+function rmsOf(float32) {
+  let sum = 0;
+  for (let i = 0; i < float32.length; i++) {
+    sum += float32[i] * float32[i];
+  }
+  return Math.sqrt(sum / Math.max(1, float32.length));
+}
+
 async function testBackend() {
   try {
     const res = await fetch('/health', { cache: 'no-store' });
@@ -94,8 +102,9 @@ async function testBackend() {
   }
 }
 
-function setupAudioGraph(mediaStream) {
+async function setupAudioGraph(mediaStream) {
   audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  await audioContext.resume();
 
   source = audioContext.createMediaStreamSource(mediaStream);
   analyser = audioContext.createAnalyser();
@@ -105,8 +114,10 @@ function setupAudioGraph(mediaStream) {
   silentGain = audioContext.createGain();
   silentGain.gain.value = 0;
 
+  // IMPORTANT: feed the processor directly from the microphone.
+  // The analyser is only a parallel visual branch.
+  source.connect(processor);
   source.connect(analyser);
-  analyser.connect(processor);
   processor.connect(silentGain);
   silentGain.connect(audioContext.destination);
 
@@ -115,19 +126,27 @@ function setupAudioGraph(mediaStream) {
     sample_rate: audioContext.sampleRate
   }));
 
+  let diagnosticCounter = 0;
+
   processor.onaudioprocess = (event) => {
     if (!running || !ws || ws.readyState !== WebSocket.OPEN) return;
 
     const input = event.inputBuffer.getChannelData(0);
+    const browserRms = rmsOf(input);
     const pcm = floatToPCM16(input);
 
     ws.send(pcm);
     totalChunks += 1;
     totalSentBytes += pcm.byteLength;
+    diagnosticCounter += 1;
 
     $('chunks').textContent = totalChunks;
     $('bytes').textContent = formatBytes(totalSentBytes);
     $('mime').textContent = `PCM16 · ${audioContext.sampleRate}Hz`;
+
+    if (diagnosticCounter % 25 === 0) {
+      log(`浏览器采音 RMS：${browserRms.toFixed(5)}`);
+    }
   };
 
   const meterData = new Uint8Array(analyser.frequencyBinCount);
@@ -173,15 +192,14 @@ async function startListening() {
     log('请求麦克风权限...');
 
     stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
+      audio: true,
       video: false,
     });
 
-    log('✅ 麦克风已授权');
+    const track = stream.getAudioTracks()[0];
+    const settings = track?.getSettings ? track.getSettings() : {};
+    log(`✅ 麦克风已授权：${track?.label || '默认麦克风'}`);
+    log(`🎤 设备设置：${JSON.stringify(settings)}`);
 
     ws = new WebSocket(wsUrl());
     ws.binaryType = 'arraybuffer';
@@ -192,10 +210,9 @@ async function startListening() {
       updateLiveUI(true);
       startTimer();
 
-      setupAudioGraph(stream);
-      await audioContext.resume();
+      await setupAudioGraph(stream);
 
-      log(`🎙️ 浏览器采样率：${audioContext.sampleRate} Hz`);
+      log(`🎙️ AudioContext 采样率：${audioContext.sampleRate} Hz`);
 
       pingId = setInterval(() => {
         if (ws?.readyState === WebSocket.OPEN) {
