@@ -2,7 +2,6 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 import json
-import math
 import time
 
 import numpy as np
@@ -42,10 +41,7 @@ async def load_asr_model():
             provider="cpu",
             debug=False,
         )
-        print(
-            f"[MODEL] Paraformer loaded in {time.time() - started:.2f}s",
-            flush=True,
-        )
+        print(f"[MODEL] Paraformer loaded in {time.time() - started:.2f}s", flush=True)
     except Exception as exc:
         model_error = f"{type(exc).__name__}: {exc}"
         print(f"[MODEL ERROR] {model_error}", flush=True)
@@ -75,25 +71,6 @@ def audio_stats(samples: np.ndarray):
     return rms, peak
 
 
-def decode_available(stream):
-    decode_count = 0
-    while recognizer.is_ready(stream):
-        recognizer.decode_stream(stream)
-        decode_count += 1
-    return recognizer.get_result(stream), decode_count
-
-
-def finalize_stream(stream, sample_rate: int):
-    tail = np.zeros(int(0.5 * sample_rate), dtype=np.float32)
-    stream.accept_waveform(sample_rate, tail)
-    stream.input_finished()
-
-    while recognizer.is_ready(stream):
-        recognizer.decode_stream(stream)
-
-    return recognizer.get_result(stream)
-
-
 @app.websocket("/ws/audio")
 async def audio_ws(websocket: WebSocket):
     await websocket.accept()
@@ -112,6 +89,7 @@ async def audio_ws(websocket: WebSocket):
     total_bytes = 0
     segment = 0
     input_sample_rate = 48000
+    device_label = ""
 
     await websocket.send_json({
         "type": "connected",
@@ -136,15 +114,20 @@ async def audio_ws(websocket: WebSocket):
                         input_sample_rate = int(data.get("sample_rate", 48000))
                     except (TypeError, ValueError):
                         input_sample_rate = 48000
-
-                    print(
-                        f"[AUDIO META] sample_rate={input_sample_rate}",
-                        flush=True,
-                    )
+                    device_label = data.get("device_label", "")
+                    print(f"[AUDIO META] sample_rate={input_sample_rate} device={device_label}", flush=True)
                     await websocket.send_json({
                         "type": "audio_meta_ack",
                         "sample_rate": input_sample_rate,
                     })
+                    continue
+
+                if data.get("type") == "client_audio_diag":
+                    print(
+                        f"[CLIENT AUDIO] device={data.get('device_label','')} "
+                        f"rms={float(data.get('rms',0)):.5f}",
+                        flush=True,
+                    )
                     continue
 
                 if data.get("type") == "ping":
@@ -152,7 +135,12 @@ async def audio_ws(websocket: WebSocket):
                     continue
 
                 if data.get("type") == "finish":
-                    final_text = finalize_stream(stream, input_sample_rate).strip()
+                    tail = np.zeros(int(0.5 * input_sample_rate), dtype=np.float32)
+                    stream.accept_waveform(input_sample_rate, tail)
+                    stream.input_finished()
+                    while recognizer.is_ready(stream):
+                        recognizer.decode_stream(stream)
+                    final_text = recognizer.get_result(stream).strip()
                     if final_text:
                         print(f"[ASR FINAL] segment={segment} text={final_text}", flush=True)
                         await websocket.send_json({
@@ -177,15 +165,17 @@ async def audio_ws(websocket: WebSocket):
                 continue
 
             stream.accept_waveform(input_sample_rate, samples)
-            result, decode_count = decode_available(stream)
-            result = result.strip()
+
+            decode_count = 0
+            while recognizer.is_ready(stream):
+                recognizer.decode_stream(stream)
+                decode_count += 1
+
+            result = recognizer.get_result(stream).strip()
 
             if result and result != last_result:
                 last_result = result
-                print(
-                    f"[ASR PARTIAL] segment={segment} decodes={decode_count} text={result}",
-                    flush=True,
-                )
+                print(f"[ASR PARTIAL] segment={segment} text={result}", flush=True)
                 await websocket.send_json({
                     "type": "transcript_partial",
                     "segment": segment,
@@ -201,7 +191,6 @@ async def audio_ws(websocket: WebSocket):
                         "segment": segment,
                         "text": final_text,
                     })
-
                 recognizer.reset(stream)
                 segment += 1
                 last_result = ""
@@ -236,10 +225,7 @@ async def audio_ws(websocket: WebSocket):
         except Exception:
             pass
     finally:
-        print(
-            f"[DISCONNECT] chunks={chunk_count} total_bytes={total_bytes}",
-            flush=True,
-        )
+        print(f"[DISCONNECT] chunks={chunk_count} total_bytes={total_bytes}", flush=True)
 
 
 app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")
