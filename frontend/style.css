@@ -1,0 +1,35 @@
+:root { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #111827; background: #f3f4f6; }
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; background: #f3f4f6; }
+button, input { font: inherit; }
+.app-shell { width: min(680px, 100%); margin: 0 auto; padding: max(20px, env(safe-area-inset-top)) 16px max(30px, env(safe-area-inset-bottom)); }
+.card { background: white; border-radius: 22px; padding: 20px; margin-bottom: 14px; box-shadow: 0 8px 30px rgba(17,24,39,.07); }
+.hero { display: flex; justify-content: space-between; align-items: center; background: #111827; color: white; }
+.eyebrow { margin: 0 0 8px; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; opacity: .65; }
+h1 { margin: 0; font-size: clamp(25px, 7vw, 38px); line-height: 1.08; }
+.sub { margin: 9px 0 0; opacity: .7; }
+.status-dot { width: 18px; height: 18px; border-radius: 999px; flex: 0 0 auto; margin-left: 16px; }
+.status-dot.idle { background: #6b7280; }
+.status-dot.live { background: #22c55e; box-shadow: 0 0 0 8px rgba(34,197,94,.16); }
+label, .label { display: block; font-weight: 700; margin-bottom: 9px; }
+input { width: 100%; border: 1px solid #d1d5db; border-radius: 14px; padding: 14px; outline: none; }
+input:focus { border-color: #111827; box-shadow: 0 0 0 3px rgba(17,24,39,.08); }
+.hint { font-size: 13px; color: #6b7280; line-height: 1.45; }
+button { width: 100%; border: none; border-radius: 15px; padding: 15px 18px; font-weight: 800; cursor: pointer; margin-top: 10px; }
+button:disabled { opacity: .45; cursor: not-allowed; }
+.primary { background: #111827; color: white; font-size: 17px; }
+.secondary { background: #e5e7eb; color: #111827; }
+.danger { background: #fee2e2; color: #991b1b; }
+.row { display: flex; align-items: center; gap: 12px; }
+.between { justify-content: space-between; }
+.big-status { margin: 0; font-size: 24px; font-weight: 850; }
+#timer { font-variant-numeric: tabular-nums; font-size: 18px; color: #6b7280; }
+.meter { height: 8px; border-radius: 99px; background: #e5e7eb; overflow: hidden; margin: 18px 0 6px; }
+#meterFill { width: 0%; height: 100%; background: #22c55e; transition: width .08s linear; }
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.stats div { min-width: 0; background: #f9fafb; border-radius: 16px; padding: 14px 10px; text-align: center; }
+.stats span { display: block; color: #6b7280; font-size: 12px; margin-bottom: 5px; }
+.stats strong { display: block; font-size: 15px; overflow: hidden; text-overflow: ellipsis; }
+.log-card pre { background: #0b1020; color: #bbf7d0; border-radius: 14px; padding: 14px; height: 180px; overflow: auto; white-space: pre-wrap; word-break: break-all; font-size: 12px; }
+.text-btn { width: auto; margin: 0; padding: 6px 10px; background: transparent; color: #6b7280; }
+.privacy { text-align: center; font-size: 12px; color: #9ca3af; padding: 3px 10px; }
